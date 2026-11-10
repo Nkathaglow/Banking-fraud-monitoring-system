@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+anchor.json
+.pytest_cache/
+data/
+models/data/
+data/
+models/*.pkl

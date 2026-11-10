@@ -1,0 +1,8 @@
+{
+  "files": {
+    "fraud_model.pkl": "83f76a3c41c14a472c6ced2de21ecbff45133c41543766bc9142806312b9d5d3",
+    "scaler.pkl": "b4634bf6cd8f1f236423e0e3c19ee92a923b58e2806696f4a7b7facc025e37be",
+    "feature_columns.pkl": "c9694ab29796cb7e983acdecae2054e0a18c07603e5865d0318af43031a63742"
+  },
+  "signature": "89320ec45c11be86a2ca1150189f9166f83f052c91aa925c62228541be7f08cb"
+}

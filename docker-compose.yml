@@ -1,0 +1,67 @@
+services:
+  db:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: fraud_owner
+      POSTGRES_PASSWORD: ${OWNER_DB_PASSWORD}
+      POSTGRES_DB: banking_fraud_db
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/db-init:/docker-entrypoint-initdb.d:ro
+    networks: [backend]            # internal network: Postgres is never published to the host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fraud_owner -d banking_fraud_db"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [backend]
+
+  migrate:                         # one-shot, runs as OWNER: tables + append-only triggers
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://fraud_owner:${OWNER_DB_PASSWORD}@db:5432/banking_fraud_db
+    command: ["python", "-m", "scripts.init_db"]
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [backend]
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://fraud_app:${APP_DB_PASSWORD}@db:5432/banking_fraud_db   # INSERT/SELECT only
+      REDIS_URL: redis://redis:6379/0
+      MODELS_DIR: /app/models
+    volumes:
+      - ./models:/app/models:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_started}
+    networks: [backend, edge]
+    expose: ["8000"]    
+    REQUIRE_HTTPS: "true"           # reachable only through Caddy
+
+  caddy:
+    image: caddy:2.8-alpine
+    ports: ["8443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [api]
+    networks: [edge]
+
+networks:
+  backend: {internal: true}
+  edge: {}
+
+volumes:
+  pgdata:
+  caddy_data:
