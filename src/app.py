@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .audit import append_audit, pseudonymize
@@ -53,6 +55,14 @@ app = FastAPI(
     openapi_url="/openapi.json" if _settings.enable_docs else None,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.middleware("http")
 async def security_middleware(request, call_next):
@@ -75,6 +85,42 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/audit-logs")
+def get_audit_logs(
+    client_id: str = Depends(require_role("txn")),
+    db: Session = Depends(get_db),
+):
+    """Fetches persistent audit records from the database for the Bank Fraud Ops dashboard."""
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, request_id, account_hash, transaction_type, amount, "
+                "decision, risk_level, decision_source, ml_probability, security_threat, "
+                "message, timestamp FROM audit_logs ORDER BY id DESC LIMIT 100"
+            )
+        ).mappings().all()
+        return [
+            {
+                "audit_id": r["id"],
+                "request_id": r["request_id"],
+                "account_hash": r["account_hash"],
+                "type": r["transaction_type"],
+                "amount": float(r["amount"]) if r["amount"] is not None else 0.0,
+                "decision": r["decision"],
+                "risk_level": r["risk_level"],
+                "decision_source": r["decision_source"],
+                "fraud_probability": float(r["ml_probability"]) if r["ml_probability"] is not None else 0.0,
+                "security_threat": r["security_threat"],
+                "reason": r["message"],
+                "timestamp": r["timestamp"].isoformat() if hasattr(r["timestamp"], "isoformat") else str(r["timestamp"]),
+            }
+            for r in rows
+        ]
+    except Exception:
+        logger.exception("Failed to query audit_logs table")
+        return []
+
+
 @app.post("/predict", response_model=DecisionResponse, response_model_exclude_none=True)
 def predict(
     tx: TransactionInput = Body(openapi_examples=TRANSACTION_EXAMPLES),
@@ -83,8 +129,6 @@ def predict(
     store=Depends(get_store),
     bundle=Depends(get_bundle),
 ):
-    """Plain `def`: FastAPI runs it in a threadpool, so CPU-bound model scoring never blocks the event loop.
-    Fail-closed: if state store, model or audit DB fails, the client gets 503 and must NOT treat it as approved."""
     request_id = str(uuid.uuid4())
     s = get_settings()
     try:
@@ -132,7 +176,6 @@ def record_sim_event(
     client_id: str = Depends(require_role("telco")),
     db: Session = Depends(get_db),
 ):
-    """Simulated telco feed."""
     now = datetime.now(timezone.utc)
     occurred = (event.occurred_at or now).astimezone(timezone.utc)
     db.add(SimEventModel(account_hash=pseudonymize(event.account_id),
